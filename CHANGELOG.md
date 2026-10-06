@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- Drop a promoted parameter onto the empty area at the bottom right of the timeline to delete that parameter and every master above it. The parameter directly below becomes a constant and keeps its value; anything bound below that stays as it was. A built-in parameter cannot be deleted, so dropping it removes only the masters above and the built-in itself becomes the constant. A parameter that is not part of a promote chain is left alone. If there is a bind besides the single chain link, the drop changes nothing.
+
 ## 0.2.0
 
 ### Changed

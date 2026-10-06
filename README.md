@@ -8,9 +8,8 @@ By hand you open Customize Component, drag the parameter in, place it, and add a
 
 1. Drop `Promote.tox` into the project.
 2. Leave **Active** on. While it is on, the address-bar hook is applied.
-3. Drag a parameter onto an ancestor's name in the address bar.
-
-Done. The chain is in place, and the parameters follow the signal order through the network.
+3. Drag a parameter onto an ancestor's name in the address bar. The chain is in place, and the parameters follow the signal order through the network.
+4. To remove it, drag the parameter onto the empty area at the bottom right of the timeline, to the right of the transport buttons. That parameter and every master above it are deleted. The one directly below becomes a constant and keeps its value.
 
 ## How it works
 
