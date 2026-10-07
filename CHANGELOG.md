@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+### Changed
+
+- Promoting an axis or a group finishes a chain that already exists in the other shape. Dragging one axis pulls that axis out of a custom group on every level up to the drop, and the axes that remain stay together. Dragging the group builds the whole group and removes axes of that group that were promoted on their own. The header is the path to the source operator, including when the drag starts from an axis that was already promoted.
+
+### Fixed
+
+- Update all no longer stops on a non-COMP at the project root. Renaming a parameter clears the bind expression before the name changes, so a failed lookup is not left on the operator.
+
 ## 0.4.0
 
 ### Changed

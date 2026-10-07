@@ -201,30 +201,426 @@ class PromoteExt:
     def Promote(self, par, dest):
         """Promote the dragged parameter or group to ancestor COMP `dest`.
 
-        A ParGroup is the whole tuplet. A Par is only that parameter.
-        Returns the list of created/reused custom-par names, top level last.
-        Raises PromoteError (and changes nothing) when it can't be done.
+        A ParGroup is the whole tuplet. A Par is only that parameter. Either
+        one is followed down to the parameter that is not already on the
+        Interface page, so dragging a promoted axis is the same as dragging
+        its source.
+
+        An axis becomes its own parameter on every level up to `dest`, and is
+        pulled out of a custom group that still holds it. A group becomes one
+        group on those levels; axes of that tuplet promoted on their own are
+        removed and join it. A bind that is not this chain is refused before
+        anything is written.
+
+        Returns the custom-par names, top level last.
         """
         dest = op(dest) if isinstance(dest, str) else dest
-        members = self._drag_members(par)
-        owner = members[0].owner
-        spec = ParSpec(members)
-
+        dragged = self._drag_members(par)
+        sources = tuple(self._follow_to_source(m) for m in dragged)
+        if any(s.owner is not sources[0].owner for s in sources):
+            raise PromoteError('%s parameters are not on one operator'
+                               % sources[0].owner.path)
+        owner = sources[0].owner
+        spec = ParSpec(sources)
+        for src in sources:
+            self._refuse_foreign(src, src)
         levels = self._levels(owner, dest)
-        plan = self._plan(spec, owner, levels)
+        plans = self._promote_plans(spec, sources, owner, levels)
 
         ui.undo.startBlock('Promote %s.%s -> %s'
                            % (owner.name, spec.base, dest.path))
         try:
-            self._apply(spec, owner, levels, plan)
-        finally:
+            names = self._promote_apply(spec, sources, owner, levels, plans)
+        except PromoteError:
             ui.undo.endBlock()
-        for lvl in levels:
-            self._update_level(lvl)
-        names = [n for n, _ in plan]
+            ui.undo.undo()
+            raise
+        except Exception as e:
+            ui.undo.endBlock()
+            ui.undo.undo()
+            raise PromoteError('%s' % e)
+        ui.undo.endBlock()
         self._say('%s.%s -> %s (%d levels)'
                   % (owner.path, spec.base, names[-1], len(levels)))
         return names
+
+    def _follow_to_source(self, par):
+        """Walk promote slaves down to a parameter not on the Interface page."""
+        cur, seen = par, set()
+        while self._on_interface(cur):
+            ident = (cur.owner.path, cur.name)
+            if ident in seen:
+                raise PromoteError('bind cycle at %s.%s' % ident)
+            seen.add(ident)
+            slaves = [ref for ref in cur.bindReferences
+                      if self._is_promote_slave(ref, cur)]
+            if len(slaves) != 1:
+                break
+            cur = slaves[0]
+        return cur
+
+    def _refuse_foreign(self, par, source):
+        """Expression, export, or a bind that is not this promote chain."""
+        if par.mode == ParMode.CONSTANT:
+            return
+        if par.mode != ParMode.BIND:
+            raise PromoteError("'%s' is driven by an expression or export"
+                               % par.name)
+        master = self._promote_master(par)
+        if master is None:
+            raise PromoteError("'%s' is already bound or driven elsewhere"
+                               % par.name)
+        src, steps = self._chain_source(master)
+        if steps < 1 or not src.isSamePar(source):
+            raise PromoteError("'%s' is already bound or driven elsewhere"
+                               % par.name)
+
+    def _promote_plans(self, spec, sources, owner, levels):
+        """One action per level. Nothing is written.
+
+        'reuse' keeps a custom parameter whose members are already exactly
+        these sources. 'extract' pulls the one dragged axis out of its group.
+        'create' builds the group, after removing axes that were promoted apart.
+        """
+        plans = []
+        for lvl in levels:
+            found = self._ours_on(lvl, sources)
+            seen = {}
+            for member, src in found:
+                key = (src.owner.path, src.name)
+                if key in seen:
+                    raise PromoteError(
+                        "%s already has a parameter '%s' that is not part of "
+                        "this chain" % (lvl.path, member.name))
+                seen[key] = member
+                self._refuse_foreign(member, src)
+            exact = self._exact_group(lvl, sources)
+            desired = par_name(*rel_parts(lvl, owner), spec.base)
+            if exact is not None:
+                plans.append({
+                    'lvl': lvl, 'role': 'reuse', 'masters': exact,
+                    'rebuilds': [], 'consumed': [None] * len(sources),
+                    'desired': desired,
+                })
+                continue
+            rebuilds, consumed = self._rebuilds_for(
+                lvl, sources, found, spec, desired)
+            role = 'extract' if spec.size == 1 and found else 'create'
+            if role == 'create':
+                self._names_clear(lvl, spec.member_names(desired), rebuilds)
+            plans.append({
+                'lvl': lvl, 'role': role, 'masters': None,
+                'rebuilds': rebuilds, 'consumed': consumed,
+                'desired': desired,
+            })
+        return plans
+
+    def _ours_on(self, lvl, sources):
+        """[(member, source)] on this Interface page for these sources."""
+        page = next((p for p in lvl.customPages
+                     if p.name == self._pagename), None)
+        if page is None:
+            return []
+        out = []
+        for pg in page.parGroups:
+            if pg[0].style == 'Header':
+                continue
+            for member in pg[0].tuplet:
+                src, steps = self._chain_source(member)
+                if steps < 1:
+                    continue
+                if any(src.isSamePar(s) for s in sources):
+                    out.append((member, src))
+        return out
+
+    def _exact_group(self, lvl, sources):
+        """Members of a custom group that is already exactly `sources`, in order."""
+        page = next((p for p in lvl.customPages
+                     if p.name == self._pagename), None)
+        if page is None:
+            return None
+        for pg in page.parGroups:
+            if pg[0].style == 'Header':
+                continue
+            members = tuple(pg[0].tuplet)
+            if len(members) != len(sources):
+                continue
+            ok = True
+            for member, src in zip(members, sources):
+                found, steps = self._chain_source(member)
+                if steps < 1 or not found.isSamePar(src):
+                    ok = False
+                    break
+            if ok:
+                return members
+        return None
+
+    def _rebuilds_for(self, lvl, sources, found, spec, desired):
+        """Groups that lose the dragged axes, and consumed pars in source order."""
+        by_src = {(src.owner.path, src.name): member for member, src in found}
+        consumed = [by_src.get((s.owner.path, s.name)) for s in sources]
+        groups, seen = [], set()
+        for member, _src in found:
+            group = member.parGroup
+            if group.name in seen:
+                continue
+            seen.add(group.name)
+            groups.append(group)
+        rebuilds = []
+        gesture_names = [] if spec.size == 1 and found else spec.member_names(desired)
+        for group in groups:
+            members = tuple(group[0].tuplet)
+            ours, keepers = [], []
+            for member in members:
+                src, steps = self._chain_source(member)
+                if (steps >= 1 and any(src.isSamePar(s) for s in sources)):
+                    ours.append(member)
+                else:
+                    keepers.append(member)
+            extracts = ours if spec.size == 1 else []
+            reserved = {m.name for m in extracts}
+            reserved.update(gesture_names)
+            reserved.update(self._surviving_names(lvl, members))
+            rebuilds.append({
+                'group_name': group.name,
+                'members': members,
+                'keepers': self._keeper_plan(
+                    lvl, group.name, keepers, reserved),
+                'extracts': extracts,
+                'extract_names': [p.name for p in extracts],
+            })
+        return rebuilds, consumed
+
+    def _surviving_names(self, lvl, doomed_members):
+        """Custom names on `lvl` that this rebuild will not destroy."""
+        doomed = {m.name for m in doomed_members}
+        page = next((p for p in lvl.customPages
+                     if p.name == self._pagename), None)
+        names = set()
+        if page is None:
+            return names
+        for pg in page.parGroups:
+            for member in pg:
+                if member.name not in doomed:
+                    names.add(member.name)
+        return names
+
+    def _keeper_plan(self, lvl, group_name, keepers, reserved):
+        """How to put the axes that stay back after the group is destroyed.
+
+        One axis keeps its script name. Two or more become one group again.
+        Letter suffixes are kept when they do not collide; otherwise the
+        group is a numbered float or int and binds are rewritten.
+        """
+        if not keepers:
+            return None
+        if len(keepers) == 1:
+            return {'solo': True, 'par': keepers[0], 'name': keepers[0].name}
+        srcs = []
+        for par in keepers:
+            src, steps = self._chain_source(par)
+            srcs.append(src if steps >= 1 else par)
+        kspec = ParSpec(tuple(srcs))
+        names = kspec.member_names(group_name)
+        if any(n in reserved for n in names):
+            if srcs[0].isFloat:
+                kspec.kind = 'Float'
+            elif srcs[0].isInt:
+                kspec.kind = 'Int'
+            names = kspec.member_names(group_name)
+        for name in names:
+            if name in reserved:
+                raise PromoteError(
+                    "%s already has a parameter '%s' that is not part of "
+                    "this chain" % (lvl.path, name))
+        return {
+            'solo': False, 'pars': keepers, 'sources': srcs, 'spec': kspec,
+            'names': names, 'olds': [p.name for p in keepers],
+            'group_name': group_name,
+        }
+
+    def _names_clear(self, lvl, names, rebuilds):
+        """Refuse a new name owned by a parameter this promote does not replace."""
+        doomed = set()
+        for rb in rebuilds:
+            for member in rb['members']:
+                doomed.add(member.name)
+        for name in names:
+            if name in doomed or lvl.par[name] is None:
+                continue
+            raise PromoteError(
+                "%s already has a parameter '%s' that is not part of "
+                "this chain" % (lvl.path, name))
+
+    def _promote_apply(self, spec, sources, owner, levels, plans):
+        """Reshape, bind bottom-up, then sort. Call inside the undo block."""
+        spec.value = [s.eval() for s in sources]
+        for plan in plans:
+            plan['consumed_names'] = [
+                None if p is None else p.name for p in plan['consumed']]
+        doomed = []
+        for plan in plans:
+            for rb in plan['rebuilds']:
+                doomed.extend(rb['members'])
+            keepers = [rb['keepers'] for rb in plan['rebuilds']]
+            for kb in keepers:
+                if kb and not kb['solo']:
+                    kb['spec'].value = [p.eval() for p in kb['pars']]
+        freezes = [self._freeze(p) for p in doomed]
+        doomed_keys = {(p.owner.path, p.name) for p in doomed}
+        ref_values = {}
+        for fr in freezes:
+            for ref, _path, _name, _expr in fr['refs']:
+                if id(ref) not in ref_values:
+                    ref_values[id(ref)] = ref.eval()
+        released = set()
+
+        def release(par, value):
+            if id(par) in released:
+                return
+            released.add(id(par))
+            self._release_bind(par)
+            par.val = value
+
+        for fr in freezes:
+            for ref, _path, _name, _expr in fr['refs']:
+                release(ref, ref_values[id(ref)])
+            release(fr['par'], fr['value'])
+        groups, seen_groups = [], set()
+        for par in doomed:
+            group = par.parGroup
+            if group is None:
+                continue
+            key = (par.owner.path, group.name)
+            if key in seen_groups:
+                continue
+            seen_groups.add(key)
+            groups.append(group)
+        for group in groups:
+            group.destroy()
+
+        replacements = {}
+        masters_per_level = []
+        tokens = []
+        for plan in plans:
+            lvl = plan['lvl']
+            if plan['role'] == 'reuse':
+                masters_per_level.append(plan['masters'])
+                continue
+            page = self._page(lvl)
+            self._header(lvl, page, owner)
+            for rb in plan['rebuilds']:
+                tokens.extend(self._rebuild(
+                    lvl, page, rb, freezes, replacements))
+            if plan['role'] == 'create':
+                created = spec.create(page, plan['desired'])
+                masters = list(created)
+                for old, old_name, newp in zip(
+                        plan['consumed'], plan['consumed_names'], masters):
+                    if old is None:
+                        continue
+                    replacements[(lvl.path, old_name)] = newp
+                    if old_name != newp.name:
+                        tokens.append((old_name, newp.name))
+            else:
+                masters = []
+                for old_name in plan['consumed_names']:
+                    if old_name is None:
+                        raise PromoteError(
+                            '%s lost the promoted axis' % lvl.path)
+                    masters.append(replacements[(lvl.path, old_name)])
+            masters_per_level.append(masters)
+
+        tokens = [(old, new) for old, new in tokens if old != new]
+        tokens.sort(key=lambda pair: -len(pair[0]))
+        for fr in freezes:
+            newp = replacements.get((fr['path'], fr['name']))
+            if newp is None:
+                continue
+            if fr['mode'] == ParMode.BIND and fr['bindExpr']:
+                self._bind_expr(newp, self._swap_tokens(fr['bindExpr'], tokens))
+            for ref, ref_path, ref_name, expr in fr['refs']:
+                if (ref_path, ref_name) in doomed_keys:
+                    continue
+                updated = expr
+                if expr == 'parent().par.' + fr['name']:
+                    updated = 'parent().par.' + newp.name
+                elif fr['name'] != newp.name:
+                    updated = self._swap_tokens(expr, [(fr['name'], newp.name)])
+                self._bind_expr(ref, updated)
+
+        below = list(sources)
+        names = []
+        for masters in masters_per_level:
+            for slave, master in zip(below, masters):
+                if not self._is_linked(slave, master):
+                    self._link(slave, master)
+            below = list(masters)
+            names.append(masters[0].parGroup.name)
+        for lvl in levels:
+            self._update_level(lvl)
+        return names
+
+    def _freeze(self, par):
+        """Bind state captured before a parameter is destroyed."""
+        src, steps = self._chain_source(par)
+        return {
+            'par': par,
+            'path': par.owner.path,
+            'name': par.name,
+            'value': par.eval(),
+            'mode': par.mode,
+            'bindExpr': par.bindExpr or '',
+            'source': src if steps >= 1 else par,
+            'refs': [(ref, ref.owner.path, ref.name, ref.bindExpr or '')
+                     for ref in list(par.bindReferences)
+                     if ref.mode == ParMode.BIND],
+        }
+
+    def _rebuild(self, lvl, page, rb, freezes, replacements):
+        """Recreate keepers and extracted axes. Consumed axes are not put back.
+
+        Returns rename tokens for keeper script names that changed.
+        """
+        by_key = {(fr['path'], fr['name']): fr for fr in freezes}
+        tokens = []
+        kb = rb['keepers']
+        if kb and kb['solo']:
+            key = (lvl.path, kb['name'])
+            fr = by_key[key]
+            spec = ParSpec((fr['source'],))
+            spec.value = [fr['value']]
+            spec.create(page, kb['name'])
+            newp = lvl.par[kb['name']]
+            if newp is None:
+                raise PromoteError('could not restore %s.%s'
+                                   % (lvl.path, kb['name']))
+            replacements[key] = newp
+        elif kb:
+            kb['spec'].create(page, kb['group_name'])
+            group = lvl.parGroup[kb['group_name']]
+            if group is None:
+                raise PromoteError('could not restore %s.%s'
+                                   % (lvl.path, kb['group_name']))
+            made = list(group[0].tuplet)
+            if [p.name for p in made] != kb['names']:
+                raise PromoteError('could not restore %s.%s'
+                                   % (lvl.path, kb['group_name']))
+            for old_name, newp in zip(kb['olds'], made):
+                replacements[(lvl.path, old_name)] = newp
+                if old_name != newp.name:
+                    tokens.append((old_name, newp.name))
+        for name in rb['extract_names']:
+            fr = by_key[(lvl.path, name)]
+            spec = ParSpec((fr['source'],))
+            spec.value = [fr['value']]
+            spec.create(page, fr['name'])
+            newp = lvl.par[fr['name']]
+            if newp is None:
+                raise PromoteError('could not restore %s.%s'
+                                   % (lvl.path, fr['name']))
+            replacements[(lvl.path, fr['name'])] = newp
+        return tokens
 
     @staticmethod
     def _levels(owner, dest):
@@ -239,54 +635,6 @@ class PromoteExt:
         raise PromoteError('%s is not an ancestor of %s'
                            % (dest.path, owner.path))
 
-    def _plan(self, spec, owner, levels):
-        """Validate everything; returns [(name, already_linked)] per level."""
-        for p in spec.tuplet:
-            if p.mode not in (ParMode.CONSTANT, ParMode.BIND):
-                raise PromoteError("'%s' is driven by an expression or "
-                                   "export" % p.name)
-        plan, below = [], list(spec.tuplet)
-        for lvl in levels:
-            name = par_name(*rel_parts(lvl, owner), spec.base)
-            existing = self._existing_tuplet(lvl, name)
-            linked = False
-            if existing is not None:
-                linked = (len(existing) == spec.size and
-                          all(self._is_linked(s, m)
-                              for s, m in zip(below, existing)))
-                if not linked:
-                    raise PromoteError(
-                        "%s already has a parameter '%s' that is not part of "
-                        "this chain" % (lvl.path, name))
-            elif any(s is not None and s.mode != ParMode.CONSTANT
-                     for s in below):
-                raise PromoteError("'%s' is already bound or driven "
-                                   "elsewhere" % below[0].name)
-            else:
-                self._names_free(lvl, name, spec)
-            plan.append((name, linked))
-            below = (list(existing) if existing is not None
-                     else [None] * spec.size)
-        return plan
-
-    def _existing_tuplet(self, lvl, name):
-        pg = lvl.parGroup[name]
-        return tuple(pg[0].tuplet) if pg is not None else None
-
-    @staticmethod
-    def _names_free(lvl, name, spec):
-        """Refuse when a new group would take a name a separate axis already has.
-
-        `appendXY('Size')` creates `Sizex`, which is also the name of a
-        parameter promoted from the `x` axis alone.
-        """
-        for member in spec.member_names(name):
-            if member == name or lvl.par[member] is None:
-                continue
-            raise PromoteError(
-                "%s already has a parameter '%s' that is not part of "
-                "this chain" % (lvl.path, member))
-
     @staticmethod
     def _is_linked(slave, master):
         if slave is None or master is None or slave.mode != ParMode.BIND:
@@ -294,33 +642,17 @@ class PromoteExt:
         m = slave.bindMaster
         return m is not None and m.owner is master.owner and m.name == master.name
 
-    def _apply(self, spec, owner, levels, plan):
-        below = list(spec.tuplet)
-        # create top-down so that a failure leaves the upper levels clean
-        made = {}
-        for lvl, (name, linked) in reversed(list(zip(levels, plan))):
-            if linked:
-                made[lvl.path] = self._existing_tuplet(lvl, name)
-                continue
-            page = self._page(lvl)
-            self._header(lvl, page, owner)
-            made[lvl.path] = spec.create(page, name)
-        # bind bottom-up: native par -> C1 -> C2 ...
-        for lvl, (name, linked) in zip(levels, plan):
-            master = made[lvl.path]
-            if not linked:
-                for s, m in zip(below, master):
-                    self._link(s, m)
-            below = list(master)
-
     @staticmethod
     def _link(slave, master):
-        expr = 'parent().par.' + master.name
-        slave.bindExpr = expr
-        slave.mode = ParMode.BIND
-        if slave.bindMaster is None:
+        PromoteExt._bind_expr(slave, 'parent().par.' + master.name)
+
+    @staticmethod
+    def _bind_expr(par, expr):
+        par.bindExpr = expr
+        par.mode = ParMode.BIND
+        if par.bindMaster is None and not par.isPulse:
             raise PromoteError('bind of %s.%s did not resolve (%s)'
-                               % (slave.owner.path, slave.name, expr))
+                               % (par.owner.path, par.name, expr))
 
     # ---- custom page / headers --------------------------------------------
     def _page(self, lvl):
@@ -803,7 +1135,7 @@ class PromoteExt:
                 if ref.mode != ParMode.BIND:
                     continue
                 held.append((ref, ref.bindExpr or ''))
-                ref.mode = ParMode.CONSTANT
+                self._release_bind(ref)
             slaves.append((i, held))
         g.baseName = new
         g2 = comp.parGroup[new]
@@ -838,9 +1170,7 @@ class PromoteExt:
         if not tokens:
             return owners
         tokens.sort(key=lambda pair: -len(pair[0]))
-        for top in op('/').children:
-            if top.name in SKIP_ROOTS:
-                continue
+        for top in self._root_comps():
             for o in [top] + list(top.findChildren()):
                 for p in o.pars():
                     if p.mode == ParMode.EXPRESSION:
@@ -1018,14 +1348,23 @@ class PromoteExt:
         if iface:
             label = d.name
             for pg in iface.parGroups:
-                n = pg.name
                 if pg[0].style == 'Header':
                     label = d.name + '.' + pg[0].label
                     continue
-                name = self._promoted_name(pg[0], lvl)
-                if name is None:
-                    name = par_name(d.name, n)
-                if name in present:
+                resolved = []
+                for member in pg[0].tuplet:
+                    name = self._promoted_name(member, lvl)
+                    if name is None or name not in present or name in seen:
+                        continue
+                    seen.add(name)
+                    resolved.append(name)
+                if resolved:
+                    for name in resolved:
+                        out.append((label, name))
+                    continue
+                name = par_name(d.name, pg.name)
+                if name in present and name not in seen:
+                    seen.add(name)
                     out.append((label, name))
         return out
 
@@ -1037,15 +1376,21 @@ class PromoteExt:
         name = self._pagename
         me = self.ownerComp.path
         found = []
-        for top in op('/').children:
-            if top.name in SKIP_ROOTS:
-                continue
+        for top in self._root_comps():
             for c in [top] + list(top.findChildren()):
                 if not c.isCOMP or c.path == me or c.path.startswith(me + '/'):
                     continue
                 if any(pg.name == name for pg in c.customPages):
                     found.append(c)
         return found
+
+    @staticmethod
+    def _root_comps():
+        """Top-level COMPs Update all may walk. A DAT at root has no children."""
+        for top in op('/').children:
+            if top.name in SKIP_ROOTS or not top.isCOMP:
+                continue
+            yield top
 
     # ======================================================================
     # install / uninstall (address bar and timeline track)
