@@ -6,7 +6,7 @@ By hand you open Customize Component, drag the parameter in, place it, and add a
 
 ## How to use
 
-1. Drop `Promote.0.6.0.tox` into the project.
+1. Drop `Promote.0.6.1.tox` into the project.
 2. Leave **Active** on. While it is on, the address-bar hook is applied.
 3. Drag a parameter onto an ancestor's name in the address bar. The chain is in place, and the parameters follow the signal order through the network.
 4. To remove a custom parameter, drag it onto the empty area at the bottom right of the timeline, to the right of the transport buttons. The parameter is deleted even when it was not promoted. If it is part of a promote chain, every master above it is deleted too, and the one directly below becomes a constant and keeps its value.
@@ -20,6 +20,8 @@ A drop builds a chain from the parameter owner's parent up to the ancestor it wa
 - the original parameter is the bottom of the chain.
 
 A change on any level reaches the others. These are ordinary custom parameters and binds, so a saved project does not need the plugin.
+
+An RGBA color keeps that style and the number of channels it currently has. Dragging one channel of the color still promotes only that channel.
 
 The new parameters sit on a custom page (default name `Interface`), under a header labeled with the relative path, for example `processing.transform1`.
 

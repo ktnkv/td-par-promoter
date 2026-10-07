@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- Promoting an RGBA parameter keeps that style and however many channels it currently has. A three-channel color is no longer turned into an XYZW vector. Dragging one channel of a color still promotes that channel alone.
+
 ## 0.6.0
 
 ### Changed

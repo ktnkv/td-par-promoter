@@ -99,6 +99,13 @@ class ParSpec:
             self.label = group_label or p0.label
         self.help = p0.help
         self.kind = self._kind(p0, self.size)
+        # RGBA keeps its style at whatever channel count the parameter
+        # actually has. One pulled-out axis stays a Float, and a subset
+        # that is not the whole tuplet stays on the size map: appendRGBA
+        # can only build a prefix of r,g,b,a.
+        if (p0.style == 'RGBA' and not self.solo and 1 <= self.size <= 4
+                and self.tuplet == tuple(p0.tuplet)):
+            self.kind = 'RGBA'
         self.default = [p.default for p in tuplet]
         self.value = [p.val for p in tuplet]
         self.ranges = [{a: getattr(p, a) for a in self._RANGE_ATTRS}
@@ -139,6 +146,8 @@ class ParSpec:
 
     def member_names(self, group_name):
         """Script names `create` will give this parameter on a page."""
+        if self.kind == 'RGBA':
+            return [group_name + c for c in 'rgba'[:self.size]]
         suf = self._KIND_SUFFIX.get(self.kind)
         if suf is not None and len(suf) == self.size:
             return [group_name + c for c in suf]
@@ -153,10 +162,16 @@ class ParSpec:
         if kind in ('Int', 'Float') or (kind == 'Str' and self.size > 1):
             kw['size'] = self.size
         pg = getattr(page, 'append' + kind)(name, **kw)
+        # appendRGBA always creates four channels. Shrink to the source
+        # size before the length check so a 3-channel color stays RGBA.
+        if kind == 'RGBA' and pg.size != self.size:
+            pg.size = self.size
         tup = pg[0].tuplet
         if len(tup) != self.size:
             raise PromoteError('could not create %s of size %d (got %d)'
                                % (kind, self.size, len(tup)))
+        if kind == 'RGBA' and pg.style != 'RGBA':
+            raise PromoteError('could not keep RGBA style for %s' % name)
         if self.menu:
             tup[0].menuNames, tup[0].menuLabels = self.menu
         for i, p in enumerate(tup):
