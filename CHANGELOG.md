@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+### Changed
+
+- Dropping a custom parameter onto the empty area at the bottom right of the timeline deletes that parameter even when it is not part of a promote chain. A built-in parameter that is not in a chain is still left alone. A bind that is not the single chain link still refuses the drop.
+
 ## 0.5.0
 
 ### Changed

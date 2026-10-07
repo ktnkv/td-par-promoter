@@ -686,9 +686,13 @@ class PromoteExt:
         parameter cannot be deleted, so it becomes that constant and only
         the masters go.
 
-        Returns the removed names, or None when nothing dragged is in a
-        promote chain. Raises PromoteError (and changes nothing) when the
-        cut would break some other bind.
+        A custom parameter that is not in a promote chain is deleted too.
+        One axis leaves the other axes of its group in place. The whole
+        group goes when the group itself was dragged.
+
+        Returns the removed names, or None when nothing dragged is a custom
+        parameter or a promote chain. Raises PromoteError (and changes
+        nothing) when the cut would break some other bind.
         """
         members = self._drag_members(par)
         cuts = []
@@ -868,14 +872,19 @@ class PromoteExt:
     def _cut_member(self, par):
         """{'up': [par, master, ...], 'slave': par or None}, or None.
 
-        None means this parameter is not in a promote chain. A chain that
-        has an extra bind raises, so the caller can refuse before writing.
+        None means this parameter is built-in and not in a promote chain.
+        A custom parameter with no chain is still a cut: only that parameter
+        goes. An extra bind raises, so the caller can refuse before writing.
         """
         up = self._masters_including(par)
         slaves, extras = self._down_links(par)
         has_master = len(up) > 1
+        # A lone custom parameter has no promote master and no promote slave.
+        # It is still removed. A built-in in that spot, or a slave link that
+        # is not on the Interface page, is not a chain.
         if not has_master and (not self._on_interface(par) or not slaves):
-            return None
+            if not (par.isCustom and not slaves):
+                return None
         if len(slaves) > 1 or (par.isCustom and extras):
             raise PromoteError('%s.%s has other binds'
                                % (par.owner.path, par.name))
@@ -1456,8 +1465,10 @@ class PromoteExt:
     def OnTimelineDrop(self, items):
         """A parameter was dropped on the empty area of the bottom bar.
 
-        This parameter and every master above it go away, and the parameter
-        directly below becomes a constant.
+        A custom parameter is deleted even when it is not in a promote chain.
+        In a chain, every master above it goes too, and the parameter directly
+        below becomes a constant. A built-in parameter that is not in a chain
+        is left alone.
         """
         pars = [i for i in items if isinstance(i, (Par, ParGroup))]
         if not pars:

@@ -6,10 +6,10 @@ By hand you open Customize Component, drag the parameter in, place it, and add a
 
 ## How to use
 
-1. Drop `Promote.0.5.0.tox` into the project.
+1. Drop `Promote.0.6.0.tox` into the project.
 2. Leave **Active** on. While it is on, the address-bar hook is applied.
 3. Drag a parameter onto an ancestor's name in the address bar. The chain is in place, and the parameters follow the signal order through the network.
-4. To remove it, drag the parameter onto the empty area at the bottom right of the timeline, to the right of the transport buttons. That parameter and every master above it are deleted. The one directly below becomes a constant and keeps its value.
+4. To remove a custom parameter, drag it onto the empty area at the bottom right of the timeline, to the right of the transport buttons. The parameter is deleted even when it was not promoted. If it is part of a promote chain, every master above it is deleted too, and the one directly below becomes a constant and keeps its value.
 
 ## How it works
 
