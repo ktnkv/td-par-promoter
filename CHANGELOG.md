@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Changed
+
+- Dragging one parameter of a group promotes or removes only that parameter. Dragging the group promotes or removes the whole group. Removing one axis of a group that was promoted together leaves the other axes in place. Dropping the group also removes axes that were promoted one by one.
+
 ## 0.3.0
 
 ### Added

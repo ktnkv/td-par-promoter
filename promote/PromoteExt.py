@@ -70,12 +70,33 @@ def rel_parts(level, op_):
 class ParSpec:
     _RANGE_ATTRS = ('min', 'max', 'clampMin', 'clampMax', 'normMin', 'normMax')
 
+    # Letters TouchDesigner appends for a vector-style custom parameter.
+    _KIND_SUFFIX = {
+        'XY': 'xy',
+        'XYZ': 'xyz',
+        'XYZW': 'xyzw',
+        'UV': 'uv',
+        'UVW': 'uvw',
+        'WH': 'wh',
+        'RGB': 'rgb',
+        'RGBA': 'rgba',
+    }
+
     def __init__(self, tuplet):
         p0 = tuplet[0]
         self.tuplet = tuple(tuplet)
         self.size = len(tuplet)
-        self.base = p0.tupletName
-        self.label = p0.parGroup.label or p0.label
+        # One axis of a larger tuplet keeps its own name. The whole group,
+        # and a parameter that is not part of one, keep tupletName.
+        self.solo = self.size == 1 and len(tuple(p0.tuplet)) > 1
+        self.base = p0.name if self.solo else p0.tupletName
+        group_label = p0.parGroup.label or p0.label or ''
+        if self.solo:
+            sub = (p0.subLabel or '').strip()
+            self.label = ((group_label + ' ' + sub).strip() if sub
+                          else p0.name)
+        else:
+            self.label = group_label or p0.label
         self.help = p0.help
         self.kind = self._kind(p0, self.size)
         self.default = [p.default for p in tuplet]
@@ -115,6 +136,15 @@ class ParSpec:
                 return st
             return {1: 'Float', 2: 'XY', 3: 'XYZ', 4: 'XYZW'}.get(n, 'Float')
         raise PromoteError("'%s': unsupported parameter type" % p.name)
+
+    def member_names(self, group_name):
+        """Script names `create` will give this parameter on a page."""
+        suf = self._KIND_SUFFIX.get(self.kind)
+        if suf is not None and len(suf) == self.size:
+            return [group_name + c for c in suf]
+        if self.size > 1:
+            return [group_name + str(i) for i in range(1, self.size + 1)]
+        return [group_name]
 
     def create(self, page, name, label_suffix=''):
         """Append this parameter to `page`; returns the new tuplet of Pars."""
@@ -157,18 +187,28 @@ class PromoteExt:
     # ======================================================================
     # Promote
     # ======================================================================
-    def Promote(self, par, dest):
-        """Promote `par` (its whole tuplet) to ancestor COMP `dest`.
+    @staticmethod
+    def _drag_members(par):
+        """Parameters this drop applies to.
 
+        A ParGroup is the whole tuplet, without a unit parameter that shares
+        the row. A Par is that parameter alone, even inside a larger tuplet.
+        """
+        if isinstance(par, ParGroup):
+            return tuple(par[0].tuplet)
+        return (par,)
+
+    def Promote(self, par, dest):
+        """Promote the dragged parameter or group to ancestor COMP `dest`.
+
+        A ParGroup is the whole tuplet. A Par is only that parameter.
         Returns the list of created/reused custom-par names, top level last.
         Raises PromoteError (and changes nothing) when it can't be done.
         """
         dest = op(dest) if isinstance(dest, str) else dest
-        # custom pars are dragged as a ParGroup, built-in ones as a Par
-        first = par[0] if isinstance(par, ParGroup) else par
-        tuplet = tuple(first.tuplet)
-        owner = first.owner
-        spec = ParSpec(tuplet)
+        members = self._drag_members(par)
+        owner = members[0].owner
+        spec = ParSpec(members)
 
         levels = self._levels(owner, dest)
         plan = self._plan(spec, owner, levels)
@@ -222,6 +262,8 @@ class PromoteExt:
                      for s in below):
                 raise PromoteError("'%s' is already bound or driven "
                                    "elsewhere" % below[0].name)
+            else:
+                self._names_free(lvl, name, spec)
             plan.append((name, linked))
             below = (list(existing) if existing is not None
                      else [None] * spec.size)
@@ -230,6 +272,20 @@ class PromoteExt:
     def _existing_tuplet(self, lvl, name):
         pg = lvl.parGroup[name]
         return tuple(pg[0].tuplet) if pg is not None else None
+
+    @staticmethod
+    def _names_free(lvl, name, spec):
+        """Refuse when a new group would take a name a separate axis already has.
+
+        `appendXY('Size')` creates `Sizex`, which is also the name of a
+        parameter promoted from the `x` axis alone.
+        """
+        for member in spec.member_names(name):
+            if member == name or lvl.par[member] is None:
+                continue
+            raise PromoteError(
+                "%s already has a parameter '%s' that is not part of "
+                "this chain" % (lvl.path, member))
 
     @staticmethod
     def _is_linked(slave, master):
@@ -284,58 +340,54 @@ class PromoteExt:
     # Unpromote
     # ======================================================================
     def Unpromote(self, par):
-        """Cut the promote chain at `par` (its whole tuplet).
+        """Cut the promote chain at the dragged parameter or group.
 
-        `par` and every master above it are deleted. The parameter bound
-        directly below becomes a constant and keeps its value; anything
-        bound below that is left as it was. A built-in parameter cannot be
-        deleted, so it becomes that constant and only the masters go.
+        A ParGroup removes every member that is in a promote chain, whether
+        they were promoted together or one by one. A Par removes only that
+        parameter. The other axes of a group promoted together stay promoted:
+        TouchDesigner cannot delete one member of a custom group, so those
+        axes are recreated as their own parameters and keep their binds.
 
-        Returns the removed group names, or None when `par` is not in a
+        The dragged parameter and every master above it are deleted. The
+        parameter bound directly below becomes a constant and keeps its
+        value; anything bound below that is left as it was. A built-in
+        parameter cannot be deleted, so it becomes that constant and only
+        the masters go.
+
+        Returns the removed names, or None when nothing dragged is in a
         promote chain. Raises PromoteError (and changes nothing) when the
         cut would break some other bind.
         """
-        first = par[0] if isinstance(par, ParGroup) else par
-        members = tuple(first.tuplet)
-        cuts = [self._cut_member(m) for m in members]
-        if all(c is None for c in cuts):
+        members = self._drag_members(par)
+        cuts = []
+        for m in members:
+            cut = self._cut_member(m)
+            if cut is not None:
+                cuts.append(cut)
+        if not cuts:
             return None
-        if any(c is None for c in cuts):
-            raise PromoteError('%s is not one promote chain'
-                               % members[0].owner.path)
-        self._same_shape(cuts)
-        custom = [m.isCustom for m in members]
+        bottoms = [c['up'][0] for c in cuts]
+        custom = [m.isCustom for m in bottoms]
         if any(custom) and not all(custom):
             raise PromoteError('%s is not one promote chain'
-                               % members[0].owner.path)
-        destroy_self = all(custom)
-        depth = len(cuts[0]['up'])
-        levels = range(0 if destroy_self else 1, depth)
-        groups = [cuts[0]['up'][level].parGroup for level in levels]
-        removed = [g.name for g in groups]
-        owners, seen = [], set()
-        for level in levels:
-            comp = cuts[0]['up'][level].owner
-            if comp.path not in seen:
-                seen.add(comp.path)
-                owners.append(comp)
-        # The direct slave keeps the value. A built-in that we cannot delete
-        # is that slave: its own master is about to disappear.
-        held = []
-        if destroy_self:
-            held = [c['slave'] for c in cuts if c['slave'] is not None]
-        else:
-            held = [c['up'][0] for c in cuts]
+                               % bottoms[0].owner.path)
+        held, groups, owners = self._removal_plan(cuts)
         values = [(p, p.eval()) for p in held]
 
+        stem = (members[0].name if len(members) == 1 and
+                len(members[0].tuplet) > 1 else members[0].tupletName)
         ui.undo.startBlock('Unpromote %s.%s'
-                           % (members[0].owner.name, members[0].tupletName))
+                           % (members[0].owner.name, stem))
         try:
             for p, value in values:
-                p.mode = ParMode.CONSTANT
+                self._release_bind(p)
                 p.val = value
-            for pg in groups:
-                pg.destroy()
+            for cut in cuts:
+                for par in cut['up'][:-1]:
+                    self._release_bind(par)
+            removed = []
+            for ginfo in groups:
+                removed.extend(self._cut_group(ginfo))
             for comp in owners:
                 self._cleanup_page(comp)
         except Exception as e:
@@ -346,6 +398,140 @@ class PromoteExt:
         self._say('removed %s (%d levels)'
                   % (', '.join(removed), len(removed)))
         return removed
+
+    def _removal_plan(self, cuts):
+        """Parameters that become constants, groups that lose members, owners.
+
+        Groups are unique and ordered parent-first, so a kept axis is
+        recreated upstairs before the level below binds to it again.
+        """
+        held = []
+        buckets, order = {}, []
+        for cut in cuts:
+            bottom = cut['up'][0]
+            if bottom.isCustom:
+                if cut['slave'] is not None:
+                    held.append(cut['slave'])
+            else:
+                held.append(bottom)
+            depth = len(cut['up'])
+            levels = range(0 if bottom.isCustom else 1, depth)
+            for level in levels:
+                par = cut['up'][level]
+                group = par.parGroup
+                if group is None:
+                    raise PromoteError('%s.%s has no parameter group'
+                                       % (par.owner.path, par.name))
+                key = (par.owner.path, group.name)
+                if key not in buckets:
+                    page = par.page
+                    buckets[key] = {
+                        'owner': par.owner,
+                        'page': None if page is None else page.name,
+                        'group_name': group.name,
+                        'cutting': [],
+                    }
+                    order.append(key)
+                buckets[key]['cutting'].append(par)
+        order.sort(key=lambda k: (k[0].count('/'), k[0], k[1]))
+        groups = [buckets[k] for k in order]
+        owners, seen = [], set()
+        for ginfo in groups:
+            path = ginfo['owner'].path
+            if path not in seen:
+                seen.add(path)
+                owners.append(ginfo['owner'])
+        return held, groups, owners
+
+    def _cut_group(self, ginfo):
+        """Delete the cut members of one custom group. Keep the other axes.
+
+        Returns the names that went away. A group that loses every member
+        is named once. A group that keeps an axis reports the removed
+        member names; those axes come back as their own parameters.
+        """
+        comp = ginfo['owner']
+        group = comp.parGroup[ginfo['group_name']]
+        if group is None:
+            raise PromoteError("%s has no '%s' to remove"
+                               % (comp.path, ginfo['group_name']))
+        tuplet = tuple(group[0].tuplet)
+        cutting = ginfo['cutting']
+        keepers = [p for p in tuplet
+                   if not any(p.isSamePar(c) for c in cutting)]
+        if not keepers:
+            name = group.name
+            group.destroy()
+            return [name]
+        snaps = [self._snap_keeper(p) for p in keepers]
+        removed = []
+        seen = set()
+        for p in cutting:
+            if p.name not in seen:
+                seen.add(p.name)
+                removed.append(p.name)
+        page_name = ginfo['page'] or self._pagename
+        group.destroy()
+        page = next((pg for pg in comp.customPages if pg.name == page_name),
+                    None)
+        if page is None:
+            page = comp.appendCustomPage(page_name)
+        for snap in snaps:
+            self._restore_keeper(comp, page, snap)
+        return removed
+
+    def _snap_keeper(self, par):
+        """Enough to rebuild one axis after its group is destroyed.
+
+        Slaves are parked as constants first. Destroying the group would
+        otherwise leave their binds pointing at a name that is gone.
+        """
+        spec = ParSpec((par,))
+        spec.value = [par.eval()]
+        refs = []
+        for ref in list(par.bindReferences):
+            if ref.mode != ParMode.BIND:
+                continue
+            refs.append((ref, ref.bindExpr or ''))
+            self._release_bind(ref)
+        return {
+            'spec': spec,
+            'name': par.name,
+            'mode': par.mode,
+            'bindExpr': par.bindExpr or '',
+            'refs': refs,
+        }
+
+    @staticmethod
+    def _release_bind(par):
+        """Leave a constant and drop the expression.
+
+        Setting the mode alone keeps the old bind expression. Destroying the
+        master then makes the whole group look that name up and log an error.
+        """
+        if par.mode != ParMode.CONSTANT:
+            par.mode = ParMode.CONSTANT
+        if par.bindExpr:
+            par.bindExpr = ''
+
+    def _restore_keeper(self, comp, page, snap):
+        snap['spec'].create(page, snap['name'])
+        newp = comp.par[snap['name']]
+        if newp is None:
+            raise PromoteError('could not restore %s.%s'
+                               % (comp.path, snap['name']))
+        if snap['mode'] == ParMode.BIND and snap['bindExpr']:
+            newp.bindExpr = snap['bindExpr']
+            newp.mode = ParMode.BIND
+            if newp.bindMaster is None and not newp.isPulse:
+                raise PromoteError('bind of %s.%s did not resolve (%s)'
+                                   % (newp.owner.path, newp.name, snap['bindExpr']))
+        for ref, expr in snap['refs']:
+            ref.bindExpr = expr
+            ref.mode = ParMode.BIND
+            if ref.bindMaster is None and not ref.isPulse:
+                raise PromoteError('bind of %s.%s did not resolve (%s)'
+                                   % (ref.owner.path, ref.name, expr))
 
     def _cut_member(self, par):
         """{'up': [par, master, ...], 'slave': par or None}, or None.
@@ -421,28 +607,6 @@ class PromoteExt:
     @staticmethod
     def _same_par(a, b):
         return a is not None and b is not None and a.owner is b.owner and a.name == b.name
-
-    def _same_shape(self, cuts):
-        """Every member of the tuplet must be the same chain, one group per level."""
-        depth = len(cuts[0]['up'])
-        if any(len(c['up']) != depth for c in cuts):
-            raise PromoteError('%s is not one promote chain'
-                               % cuts[0]['up'][0].owner.path)
-        for level in range(depth):
-            keys = {self._group_key(c['up'][level]) for c in cuts}
-            if len(keys) != 1:
-                raise PromoteError('%s is not one promote chain'
-                                   % cuts[0]['up'][0].owner.path)
-        slave_keys = {None if c['slave'] is None else self._group_key(c['slave'])
-                      for c in cuts}
-        if len(slave_keys) != 1:
-            raise PromoteError('%s is not one promote chain'
-                               % cuts[0]['up'][0].owner.path)
-
-    @staticmethod
-    def _group_key(par):
-        group = par.parGroup
-        return (par.owner.path, group.name if group is not None else par.name)
 
     def _cleanup_page(self, comp):
         """Drop empty headers, then the page itself when nothing is left."""
@@ -537,7 +701,11 @@ class PromoteExt:
             source, steps = self._chain_source(p0)
             if steps < 1 or not source.owner.path.startswith(lvl.path + '/'):
                 continue
-            new = par_name(*rel_parts(lvl, source.owner), source.tupletName)
+            # A size-1 custom par bound to one axis of a larger tuplet is
+            # named from that axis. A whole group keeps tupletName.
+            solo = (len(tuple(g[0].tuplet)) == 1 and len(source.tuplet) > 1)
+            stem = source.name if solo else source.tupletName
+            new = par_name(*rel_parts(lvl, source.owner), stem)
             if new == g.name:
                 continue
             if new in claimed:
@@ -810,24 +978,42 @@ class PromoteExt:
             return None
         return master.parGroup.name
 
+    @staticmethod
+    def _fallback_names(child_name, par):
+        """Names to try when the bind does not resolve.
+
+        A whole group is stored under tupletName. One axis of that group is
+        stored under the axis name. Try the group first; the two cannot both
+        exist, because the group's member name is the axis name.
+        """
+        names = [par_name(child_name, par.tupletName)]
+        if len(par.tuplet) > 1:
+            member = par_name(child_name, par.name)
+            if member not in names:
+                names.append(member)
+        return names
+
     def _entries_from_child(self, lvl, d, present):
         """[(headerLabel, levelParName)] contributed by direct child d."""
         out = []
         # d's own (non-Interface) parameters promoted straight to this level
         iface = d.customPages and next(
             (p for p in d.customPages if p.name == self._pagename), None)
-        iface_names = {pg.name for pg in iface.parGroups} if iface else set()
         seen = set()
         for p in d.pars():
-            tn = p.tupletName
-            if tn in seen or tn in iface_names:
+            if self._on_interface(p):
                 continue
-            seen.add(tn)
             name = self._promoted_name(p, lvl)
             if name is None:
-                name = par_name(d.name, tn)
-            if name in present:
-                out.append((d.name, name))
+                candidates = self._fallback_names(d.name, p)
+            else:
+                candidates = [name]
+            for cand in candidates:
+                if cand in seen or cand not in present:
+                    continue
+                seen.add(cand)
+                out.append((d.name, cand))
+                break
         # what flowed up through d's Interface page, in d's own order
         if iface:
             label = d.name

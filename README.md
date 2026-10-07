@@ -26,7 +26,7 @@ The new parameters sit on a custom page (default name `Interface`), under a head
 ## Limitations
 
 - **Ancestor only.** The drop target must be a COMP above the parameter's owner. A drop on the operator itself, a non-ancestor, a separator, or a non-COMP is refused and changes nothing.
-- **Whole tuplet.** Dragging one member of a group (for example `tx`) promotes the whole group.
+- **One parameter or the whole group.** Dragging one member of a group promotes or removes only that member. Dragging the group label promotes or removes every member, including axes that were promoted one by one. An axis removed from a group that was promoted together leaves the other axes in place.
 - **Not supported:** OP references (a relative path would resolve differently on each level), Python and sequence parameters, and parameters driven by an expression or an export.
 - **Repeating a promote is safe** when the chain is already in place. A parameter that is already bound somewhere else is refused, and nothing changes.
 - **Names follow the operators when you Update.** The script name is taken from the path at the moment of the promote. After you rename an operator, pulse **Update all** on the plugin: the script name, the header, and the binds in the chain are rewritten from the current path. A parameter expression that still contains the old name (`.par.Oldname`, `.parGroup.Oldname`, or the same name in brackets) is rewritten as well. A name written in a DAT, or in a Parameter Execute DAT's parameter list, is left for you to update. If the new name is already used by a parameter that is not part of this update, the whole update is refused and the page stays as it was. After that update, promoting the same parameter again changes nothing.
