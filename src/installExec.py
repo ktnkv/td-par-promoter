@@ -1,8 +1,8 @@
 # Execute DAT: (re)apply the address-bar and timeline hooks. /ui is not saved in the .toe,
-# so this runs on every project start and when the plugin is loaded.
+# so this runs on every project start and when the tool is loaded.
 # Install() itself does nothing while Active is off.
 #
-# There is no Execute DAT callback for "being deleted". To remove the plugin
+# There is no Execute DAT callback for "being deleted". To remove the tool
 # cleanly turn `Active` off first; otherwise the stock crumb behaviour comes
 # back at the next TouchDesigner start (/ui is rebuilt then).
 

@@ -1,4 +1,4 @@
-# Parameter Execute DAT on the plugin COMP.
+# Parameter Execute DAT on the tool COMP.
 # Active turning on calls Install, turning off calls Uninstall.
 # The Updateall pulse calls the extension method of the same name.
 

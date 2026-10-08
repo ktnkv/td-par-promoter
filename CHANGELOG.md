@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2
+
+### Added
+
+- `.tox Save Build` on the About page. Export has to set it, and its default, to `app.build` before saving the tox. The value is the TouchDesigner build the file was exported from.
+
+### Changed
+
+- Promote is a tool. Text that called it a plugin now says tool.
+
 ## 0.6.1
 
 ### Fixed
@@ -38,11 +48,11 @@
 
 ### Changed
 
-- Update all finds every COMP that has the plugin's page at the moment it is pulsed, and re-sorts from the deepest one up. The plugin no longer keeps a tag on those COMPs or a list of their paths.
+- Update all finds every COMP that has the tool's page at the moment it is pulsed, and re-sorts from the deepest one up. The tool no longer keeps a tag on those COMPs or a list of their paths.
 
 ### Removed
 
-- The Update Interface pulse on each promoted page. Update all on the plugin is how a page is re-sorted.
+- The Update Interface pulse on each promoted page. Update all on the tool is how a page is re-sorted.
 - The `promote` tag and the parameter execute that watched it.
 
 ## 0.1.0

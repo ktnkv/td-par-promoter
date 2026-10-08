@@ -5,7 +5,7 @@ every COMP from owner.parent() up to the dropped-on ancestor receives a custom
 parameter (under a Header) that is bound to the level below it.
 
 Dev-time tool only: the result is plain TouchDesigner (custom pars + binds),
-nothing depends on this plugin at runtime. The plugin keeps no list of managed
+nothing depends on this tool at runtime. The tool keeps no list of managed
 COMPs; Update all finds them by their page at the moment it is pulsed.
 """
 import re
@@ -191,7 +191,7 @@ class PromoteExt:
     def __init__(self, ownerComp):
         self.ownerComp = ownerComp
 
-    # ---- plugin parameters ------------------------------------------------
+    # ---- tool parameters --------------------------------------------------
     @property
     def _pagename(self):
         return self.ownerComp.par.Pagename.eval()
@@ -1396,7 +1396,7 @@ class PromoteExt:
     # who is managed
     # ======================================================================
     def _managed_comps(self):
-        """COMPs that carry this plugin's page, as of this call."""
+        """COMPs that carry this tool's page, as of this call."""
         name = self._pagename
         me = self.ownerComp.path
         found = []
@@ -1442,7 +1442,7 @@ class PromoteExt:
 
     def _bind_drop(self, comp, callbacks):
         # re-assigning the same path string is a no-op for TD, so after
-        # the plugin was recreated the old (destroyed) DAT would stay
+        # the tool was recreated the old (destroyed) DAT would stay
         # bound: clear first to force a fresh resolve
         comp.par.dragdropcallbacks = ''
         comp.par.dragdropcallbacks = callbacks
