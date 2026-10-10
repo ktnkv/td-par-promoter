@@ -6,7 +6,7 @@ By hand you open Customize Component, drag the parameter in, place it, and add a
 
 ## How to use
 
-1. Download `Promote.*.tox` from the [latest release](https://github.com/ktnkv/td_par_promoter/releases/latest) and drop it into your project.
+1. Download `Promote.*.tox` from the [latest release](https://github.com/ktnkv/td-par-promoter/releases/latest) and drop it into your project.
 2. Leave **Active** on. While it is on, the address-bar hook is applied.
 3. Drag a parameter onto an ancestor's name in the address bar. The chain is in place, and the parameters follow the signal order through the network.
 4. To remove a custom parameter, drag it onto the empty area at the bottom right of the timeline, to the right of the transport buttons. The parameter is deleted even when it was not promoted. If it is part of a promote chain, every master above it is deleted too, and the one directly below becomes a constant and keeps its value.
