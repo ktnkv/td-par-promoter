@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+### Fixed
+
+- An axis that stays after another axis of a numbered group is removed keeps the label of the original parameter, for example `Resolution W`. It used to get the script name in its label, like `Resolution Rectresolution1`. One axis promoted from a numbered custom group is labeled by its number, like `Count 2`.
+
 ## 0.6.2
 
 ### Added

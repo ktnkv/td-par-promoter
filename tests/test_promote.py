@@ -143,6 +143,17 @@ def test_axis_pulled_out_of_a_group(t):
     t.no_errors()
 
 
+def test_axis_of_a_numbered_custom_group_is_labeled_by_its_number(t):
+    page = t.c.appendCustomPage('Controls')
+    page.appendInt('Count', label='Count', size=2)
+    t.promote.Promote(t.c.par.Count2, t.root)
+    for lvl, name in zip([t.b, t.a, t.root],
+                         ['Ccount2', 'Bccount2', 'Abccount2']):
+        t.eq(t.names(lvl), [name], lvl.path)
+        t.eq(lvl.par[name].label, 'Count 2', lvl.path)
+    t.no_errors()
+
+
 def test_menu_toggle_string_and_int(t):
     cases = [(t.xf.par.extend, 'extend'), (t.xf.par.npasses, 'npasses')]
     for par, base in cases:

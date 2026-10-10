@@ -51,6 +51,20 @@ def test_one_axis_of_a_group_leaves_the_other(t):
     t.no_errors()
 
 
+def test_axis_left_from_a_numbered_group_keeps_its_label(t):
+    # An Int group has no letter suffixes, so its masters are numbered.
+    rect = t.c.create(rectangleTOP, 'rect')
+    t.promote.Promote(rect.parGroup.resolution, t.root)
+    t.eq(t.names(t.root), ['Abcrectresolution1', 'Abcrectresolution2'])
+    t.promote.Unpromote(rect.par.resolutionh)
+    for lvl, name in zip(t.levels(), ['Rectresolution1', 'Crectresolution1',
+                                      'Bcrectresolution1',
+                                      'Abcrectresolution1']):
+        t.eq(t.names(lvl), [name], lvl.path)
+        t.eq(lvl.par[name].label, 'Resolution W', lvl.path)
+    t.no_errors()
+
+
 def test_group_drag_removes_every_axis(t):
     t.promote.Promote(t.xf.parGroup.t, t.root)
     t.promote.Unpromote(t.xf.parGroup.t)

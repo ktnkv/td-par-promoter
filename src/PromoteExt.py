@@ -93,6 +93,10 @@ class ParSpec:
         group_label = p0.parGroup.label or p0.label or ''
         if self.solo:
             sub = (p0.subLabel or '').strip()
+            # A numbered custom group has no sub-labels of its own:
+            # TouchDesigner returns the script name there. Use the number.
+            if sub == p0.name:
+                sub = p0.name[len(p0.tupletName):]
             self.label = ((group_label + ' ' + sub).strip() if sub
                           else p0.name)
         else:
@@ -839,6 +843,11 @@ class PromoteExt:
         """
         spec = ParSpec((par,))
         spec.value = [par.eval()]
+        # The axis is labeled after the original parameter, as Promote
+        # labels it. The custom group it sat in may be a numbered one.
+        src, steps = self._chain_source(par)
+        if steps >= 1:
+            spec.label = ParSpec((src,)).label
         refs = []
         for ref in list(par.bindReferences):
             if ref.mode != ParMode.BIND:
