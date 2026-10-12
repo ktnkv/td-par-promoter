@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.4
+
+### Added
+
+- A `readme` annotation and a `changelog` DAT inside the component. What the tool is, how to use it and its history now travel with the tox.
+
+### Removed
+
+- The comment on the component tile. The same text is in `readme`.
+
 ## 0.6.3
 
 ### Fixed
